@@ -38,8 +38,8 @@ pilot_mask = np.zeros(ofdm.n_tones, dtype=bool)
 pilot_mask[::8] = True
 data_tones = int(np.count_nonzero(~pilot_mask))
 
-rx_sdr = PlutoSDR(uri="usb:", tx_gain=-20)
-tx_sdr = PlutoSDR(uri="ip:192.168.8.93", rx_gain=30)
+rx_sdr = PlutoSDR(uri="usb:", rx_gain=30)
+tx_sdr = PlutoSDR(uri="ip:192.168.8.93", tx_gain=0)
 
 rng = np.random.default_rng(64)
 symbols_matrix = (
