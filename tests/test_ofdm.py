@@ -252,9 +252,58 @@ class TestDemodulate:
         recovered = ofdm.demodulate(frame)
         np.testing.assert_allclose(recovered[:len(symbols)], symbols, atol=1e-10)
 
-    def test_cfo_estimate_zero_for_correct_spacing(self, ofdm, symbols):
-        # peak spacing == 32 → estimated_cfo == 0 → correction is identity
+    def test_cfo_estimate_zero_for_clean_frame(self, ofdm, symbols):
+        # Schmidl-Cox: for a clean frame the two preambles are identical so
+        # sum(r2 * conj(r1)) is real and positive → phi = 0 → cfo = 0.
         frame = ofdm.modulate(symbols)
         peaks = ofdm._preamble_detect(frame)
-        estimated_cfo = 1 - (np.diff(peaks)[0] / 32)
-        assert estimated_cfo == pytest.approx(0.0, abs=1e-10)
+        assert len(peaks) >= 2
+        r1 = frame[int(peaks[0]) : int(peaks[0]) + 32]
+        r2 = frame[int(peaks[1]) : int(peaks[1]) + 32]
+        phi = np.angle(np.sum(r2 * np.conj(r1)))
+        cfo_norm = phi / (2 * np.pi * 32)
+        assert cfo_norm == pytest.approx(0.0, abs=1e-10)
+
+    def test_roundtrip_with_cfo(self, ofdm, symbols):
+        # Simulate cross-SDR CFO: apply a known offset within the Schmidl-Cox
+        # estimable range (±1/(2*32) ≈ ±0.0156 cycles/sample) and check that
+        # demodulate recovers the original symbols.
+        frame = ofdm.modulate(symbols)
+        cfo = 0.004  # cycles/sample — representative of ~20 ppm at 915 MHz / 1 MSPS
+        n = np.arange(len(frame))
+        frame_cfo = frame * np.exp(1j * 2 * np.pi * cfo * n)
+        recovered = ofdm.demodulate(frame_cfo)
+        np.testing.assert_allclose(recovered[:len(symbols)], symbols, atol=0.05)
+
+
+# ------------------------------------------------------------------
+# _correct_residual_phase
+# ------------------------------------------------------------------
+
+class TestCorrectResidualPhase:
+    def test_output_length(self, ofdm, symbols):
+        iframe = ofdm._construct_iframe(symbols)
+        y = np.fft.fft(np.fft.ifft(iframe))
+        h = ofdm._estimate_channel(y)
+        eq = ofdm._equalize(y, h)
+        assert len(ofdm._correct_residual_phase(eq)) == len(eq)
+
+    def test_zero_error_on_clean_signal(self, ofdm, symbols):
+        # When equalized pilots are already at 1+1j the correction is identity.
+        iframe = ofdm._construct_iframe(symbols)
+        y = np.fft.fft(np.fft.ifft(iframe))
+        h = ofdm._estimate_channel(y)
+        eq = ofdm._equalize(y, h)
+        corrected = ofdm._correct_residual_phase(eq)
+        np.testing.assert_allclose(corrected, eq, atol=1e-10)
+
+    def test_removes_constant_rotation(self, ofdm, symbols):
+        # Rotate the entire equalized vector by a known angle; correction must
+        # remove it so that the output matches the unrotated vector.
+        iframe = ofdm._construct_iframe(symbols)
+        y = np.fft.fft(np.fft.ifft(iframe))
+        h = ofdm._estimate_channel(y)
+        eq = ofdm._equalize(y, h)
+        rotation = np.exp(1j * np.pi / 5)  # 36°
+        corrected = ofdm._correct_residual_phase(eq * rotation)
+        np.testing.assert_allclose(corrected, eq, atol=1e-10)

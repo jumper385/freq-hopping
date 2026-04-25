@@ -15,7 +15,7 @@ class OFDM:
 	transmitted with the known value ``1+1j``.
 	"""
 
-	def __init__(self, n_tones: int = 100):
+	def __init__(self, n_tones: int = 50):
 		"""
 		Parameters
 		----------
@@ -73,8 +73,15 @@ class OFDM:
 		# locate the OFDM symbol inside the (possibly large) receive buffer
 		symbol_len = self.n_tones + 16
 		peaks = self._preamble_detect(y_cfo)
-		if len(peaks) >= 1:
-			# data starts one preamble-length past the first detected peak
+		if len(peaks) >= 2:
+			# Two preambles found; anchor on the second (P2) — one preamble
+			# length after P2 is the data symbol start.  Using P2 rather than
+			# P1+64 is more robust: if P1 falls near a buffer boundary or its
+			# correlation is suppressed by the leading silence, P2 alone still
+			# gives the correct timing.
+			frame_start = int(peaks[1]) + 32
+		elif len(peaks) == 1:
+			# Only one peak detected; assume it is P1.
 			frame_start = int(peaks[0]) + 32 + 32
 		else:
 			# fall back: assume y is exactly one frame
@@ -84,6 +91,7 @@ class OFDM:
 		freqs = np.fft.fft(y_stripped)
 		h = self._estimate_channel(freqs)
 		freqs = self._equalize(freqs, h)
+		freqs = self._correct_residual_phase(freqs)
 
 		pilot_mask = np.zeros(self.n_tones, dtype=bool)
 		pilot_mask[::8] = True
@@ -268,15 +276,48 @@ class OFDM:
 		"""
 		return y_freq / h
 
+	def _correct_residual_phase(self, equalized: np.ndarray) -> np.ndarray:
+		"""
+		Remove any residual common-phase error using equalized pilot subcarriers.
+
+		After zero-forcing equalization the pilots should ideally equal ``1+1j``.
+		Any *common* rotation across all pilots (caused by residual CFO phase
+		accumulated over the OFDM symbol, LO phase noise, or a constant channel
+		phase) is estimated as the mean pilot phase deviation and subtracted.
+
+		Parameters
+		----------
+		equalized : ndarray, complex
+			Equalized frequency-domain subcarriers, length ``n_tones + 16``.
+
+		Returns
+		-------
+		ndarray, complex
+			Phase-corrected subcarrier vector.
+		"""
+		pilot_mask = np.zeros(self.n_tones, dtype=bool)
+		pilot_mask[::8] = True
+		# pilot positions in the full FFT vector (offset by lower guard band)
+		pilot_bins = np.where(pilot_mask)[0] + 8
+		pilot_ref = 1 + 1j
+		phase_err = np.mean(np.angle(equalized[pilot_bins] / pilot_ref))
+		return equalized * np.exp(-1j * phase_err)
+
 	def _cancel_cfo(self, y: np.ndarray) -> np.ndarray:
 		"""
 		Estimate and correct a carrier-frequency offset using the dual preamble.
 
-		The frame contains two back-to-back ZC preambles of length 32.  The
-		sample distance between the two detected correlation peaks encodes the
-		fractional CFO as::
+		The frame contains two back-to-back ZC preambles of length 32.
+		Schmidl-Cox estimation: the phase of the conjugate product of the two
+		received preamble windows encodes the CFO as::
 
-			cfo = 1 - (peak_distance / 32)
+			phi  = angle( sum( r2 * conj(r1) ) )
+			cfo  = phi / (2 * pi * preamble_len)   [cycles/sample]
+
+		This is unambiguous for |cfo| < 1 / (2 * preamble_len), i.e.
+		±15 625 Hz at 1 MSPS with a 32-sample preamble — sufficient to cover
+		the ±20 ppm LO mismatch of two independent PlutoSDRs at 915 MHz
+		(≈ ±18 300 Hz).
 
 		A complex de-rotation is applied sample-by-sample to remove the offset.
 		If fewer than two preamble peaks are detected the signal is returned
@@ -296,6 +337,19 @@ class OFDM:
 		if len(peaks) < 2:
 			return y
 
-		estimated_cfo = 1 - (np.diff(peaks)[0] / 32)
+		preamble_len = 32
+		p1_start = int(peaks[0])
+		p2_start = int(peaks[1])
+		if p2_start + preamble_len > len(y):
+			return y
+
+		r1 = y[p1_start : p1_start + preamble_len]
+		r2 = y[p2_start : p2_start + preamble_len]
+
+		# Schmidl-Cox: phase of the conjugate product of the two received
+		# preamble copies is proportional to the CFO.
+		phi = np.angle(np.sum(r2 * np.conj(r1)))
+		cfo_norm = phi / (2 * np.pi * preamble_len)   # cycles/sample
+
 		n = np.arange(len(y))
-		return y * np.exp(-1j * 2 * np.pi * estimated_cfo * n)
+		return y * np.exp(-1j * 2 * np.pi * cfo_norm * n)
