@@ -13,17 +13,20 @@ Generate OFDM baseband waveforms in software and transmit them over the air usin
 | ID | Requirement |
 |---|---|
 | WG-01 | The system SHALL generate a baseband OFDM frame from an arbitrary array of complex input symbols. |
-| WG-02 | The frame SHALL consist of a leading silence burst, two back-to-back Zadoff-Chu preambles, the OFDM data symbol, and a trailing silence burst. |
+| WG-02 | The frame SHALL consist of a leading silence burst, two back-to-back Zadoff-Chu preambles, a cyclic-prefix-prefixed OFDM data symbol (with optional cyclic suffix when windowing is enabled), and a trailing silence burst. |
 | WG-03 | The active subcarrier region SHALL be flanked by 8-bin lower and upper guard bands (DC and high-frequency protection). |
 | WG-04 | Pilot subcarriers SHALL be inserted at every 8th active bin with the known value `1+1j`. |
-| WG-05 | The number of active subcarriers (`n_tones`) SHALL be configurable at construction time (default: 100). |
+| WG-05 | The number of active subcarriers (`n_tones`), cyclic prefix length (`cp_len`), and window roll-off length (`roll_off`) SHALL be configurable at construction time. |
 | WG-06 | The modulated frame SHALL be amplitude-normalised to ±1 before transmission. |
 | WG-07 | The demodulator SHALL correct carrier-frequency offset (CFO) using the Schmidl-Cox estimator: `φ = ∠Σ(r₂·r₁*)`, `f_cfo = φ/(2π·N)`, where `r₁`, `r₂` are the two received preamble windows and `N=32`. The estimator is unambiguous for \|f_cfo\| < f_s/(2N). |
-| WG-08 | The demodulator SHALL perform frame timing recovery via cross-correlation with the known ZC preamble, using an adaptive threshold of `μ + 5σ`. When two peaks are detected, timing SHALL be anchored on the second peak (P2); when only one is detected it is treated as P1. |
-| WG-09 | The demodulator SHALL estimate the per-subcarrier channel response using LS extraction at pilot positions and linear interpolation across all bins. |
-| WG-10 | The demodulator SHALL apply zero-forcing equalization before returning data symbols. |
-| WG-11 | The demodulator SHALL correct residual common-phase error after equalization by computing the mean phase deviation of equalized pilots from the expected `1+1j` and counter-rotating all subcarriers. |
-| WG-12 | The modulator SHALL raise `ValueError` if the number of input symbols exceeds the available data subcarriers. |
+| WG-08 | The demodulator SHALL perform frame timing recovery via ZC cross-correlation with an adaptive threshold of `μ + 5σ`. Peak detection SHALL use rising-edge detection — only the first sample where the correlation magnitude crosses the threshold upward is recorded per physical peak, giving one index per preamble occurrence. `_find_preamble_pair` SHALL then scan the resulting indices for the first consecutive pair with spacing in the range `[30, 34]` samples (nominal 32 ±2 tolerance) to identify P1 and P2. The ±2 tolerance absorbs the single-sample jitter caused by the Pluto cyclic-DMA loop-boundary transient. Timing SHALL be anchored on P2 (`data_start = P2 + 32`). If no valid pair is found and only one peak is present it is treated as P1. |
+| WG-09 | The demodulator SHALL remove the cyclic prefix (and cyclic suffix if `roll_off > 0`) before applying the FFT. |
+| WG-10 | The demodulator SHALL estimate per-subcarrier noise variance from the received power in the zero-transmitted guard-band bins (`σ² = mean(|Y[k]|²)` for guard bins). |
+| WG-11 | The demodulator SHALL estimate the per-subcarrier channel response using LS extraction at pilot positions and linear interpolation across all bins. |
+| WG-12 | The demodulator SHALL apply LMMSE equalization: `X̂[k] = H*[k]·Y[k] / (|H[k]|² + σ²)`. When `σ² = 0` this reduces to zero-forcing. |
+| WG-13 | The demodulator SHALL correct residual common-phase error after equalization by computing the mean phase deviation of equalized pilots from the expected `1+1j` and counter-rotating all subcarriers. |
+| WG-14 | The modulator SHALL raise `ValueError` if the number of input symbols exceeds the available data subcarriers. |
+| WG-15 | The modem SHALL provide `modulate_burst(symbols_matrix)` and `demodulate_burst(y, n_symbols)` methods that pack/unpack N OFDM symbols under a single preamble pair. Each symbol in a burst SHALL have its own CP and independent equalization pass on receive. |
 
 ### 2.2 PlutoSDR Transmitter
 
@@ -45,13 +48,15 @@ Generate OFDM baseband waveforms in software and transmit them over the air usin
 
 | Parameter | Symbol | Default | Notes |
 |---|---|---|---|
-| Number of active subcarriers | `n_tones` | 100 | Pilots + data bins, excluding guards |
-| Guard band width (each side) | — | 8 bins | Lower (DC) and upper (alias) protection |
+| Number of active subcarriers | `n_tones` | 50 | Pilots + data bins, excluding guards |
+| Cyclic prefix length | `cp_len` | 16 samples | Protects against multipath delay spreads up to `cp_len` samples (~16 µs at 1 MSPS) |
+| Window roll-off length | `roll_off` | 0 (disabled) | Raised-cosine CS taper; set to e.g. 8 to reduce OOB leakage |
+| Guard band width (each side) | — | 8 bins | Lower (DC) and upper (alias) protection; also used for noise variance estimation |
 | Pilot spacing | — | Every 8th bin | Within the active region |
 | Pilot value | — | `1+1j` | Known transmitted value for LS estimation |
 | Preamble type | — | Zadoff-Chu | Root index `u=31`, length `n=32` |
 | Silence padding | — | 32 samples | Pre- and post-frame |
-| Frame length | — | `128 + n_tones` samples | `32 + 32 + 32 + (n_tones+16) + 32` |
+| Single-symbol frame length | — | `128 + n_tones + cp_len + roll_off` samples | `32 + 32 + 32 + (n_tones+16+cp_len+roll_off) + 32` |
 
 ### 3.2 OFDMModulator Parameters
 
@@ -79,12 +84,25 @@ Generate OFDM baseband waveforms in software and transmit them over the air usin
 
 ## 4. Frame Structure
 
+**Single-symbol frame:**
+
 ```
 Sample index →
-┌────────────┬─────────────┬─────────────┬──────────────────────────┬────────────┐
-│ silence    │ ZC preamble │ ZC preamble │     OFDM data symbol     │ silence    │
-│  (32 samp) │  (32 samp)  │  (32 samp)  │   (n_tones + 16 samp)    │  (32 samp) │
-└────────────┴─────────────┴─────────────┴──────────────────────────┴────────────┘
+┌────────────┬─────────────┬─────────────┬──────────┬──────────────────────┬───────────┬────────────┐
+│ silence    │ ZC preamble │ ZC preamble │ CP       │ OFDM data symbol     │ CS        │ silence    │
+│ (32 samp)  │  (32 samp)  │  (32 samp)  │(cp_len)  │  (n_tones + 16 samp) │(roll_off) │ (32 samp)  │
+└────────────┴─────────────┴─────────────┴──────────┴──────────────────────┴───────────┴────────────┘
+```
+
+CS (cyclic suffix) is only present when `roll_off > 0`.
+
+**Multi-symbol burst frame** (N symbols, single preamble pair):
+
+```
+Sample index →
+┌──────────┬───────────┬───────────┬───────────────────┬───────────┬──────────┐
+│ silence  │ ZC preamble │ ZC preamble │ [CP|sym_0|CS] [CP|sym_1|CS] … │ [CP|sym_N|CS] │ silence  │
+└──────────┴───────────┴───────────┴───────────────────┴───────────┴──────────┘
 ```
 
 **OFDM symbol subcarrier layout:**
@@ -105,13 +123,19 @@ Bin index →
 ### `OFDM`
 
 ```python
-OFDM(n_tones: int = 100)
+OFDM(n_tones: int = 50, cp_len: int = 16, roll_off: int = 0)
 
-# Modulate complex symbols → time-domain frame
+# Modulate complex symbols → single-symbol time-domain frame
 .modulate(symbols: np.ndarray) -> np.ndarray
 
-# Demodulate received frame → recovered data symbols
+# Demodulate received single-symbol frame → recovered data symbols
 .demodulate(y: np.ndarray) -> np.ndarray
+
+# Modulate N rows of symbols → burst frame (one preamble pair, N CP-prefixed symbols)
+.modulate_burst(symbols_matrix: np.ndarray) -> np.ndarray   # shape (n_syms, data_tones)
+
+# Demodulate burst frame → recovered symbols per row
+.demodulate_burst(y: np.ndarray, n_symbols: int) -> np.ndarray   # shape (n_symbols, data_tones)
 ```
 
 ### `OFDMModulator`

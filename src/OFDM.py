@@ -6,7 +6,7 @@ class OFDM:
 	OFDM modem with Zadoff-Chu preamble, pilot-based channel estimation, and CFO correction.
 
 	Frame structure (samples):
-		[silence(32)] [preamble(32)] [preamble(32)] [OFDM symbol] [silence(32)]
+		[silence(32)] [preamble(32)] [preamble(32)] [CP + OFDM symbol (+ CS)] [silence(32)]
 
 	Subcarrier layout (n_tones + 16 total bins):
 		[guard(8)] [pilots + data (n_tones)] [guard(8)]
@@ -15,14 +15,24 @@ class OFDM:
 	transmitted with the known value ``1+1j``.
 	"""
 
-	def __init__(self, n_tones: int = 50):
+	def __init__(self, n_tones: int = 50, cp_len: int = 16, roll_off: int = 0):
 		"""
 		Parameters
 		----------
 		n_tones : int
 			Number of active subcarriers (pilots + data), excluding guard bands.
+		cp_len : int
+			Cyclic prefix length in samples.  Must exceed the maximum expected
+			multipath delay spread to maintain inter-symbol orthogonality.
+		roll_off : int
+			Raised-cosine window roll-off length in samples.  When non-zero a
+			cyclic suffix of length *roll_off* is appended and a raised-cosine
+			taper is applied across the CP/CS edges to reduce out-of-band
+			emissions.  Set to ``0`` (default) to disable windowing.
 		"""
 		self.n_tones = n_tones
+		self.cp_len = cp_len
+		self.roll_off = roll_off
 
 	# ------------------------------------------------------------------
 	# Public API
@@ -41,21 +51,26 @@ class OFDM:
 		Returns
 		-------
 		ndarray, complex
-			Baseband time-domain frame of length ``32 + 32 + 32 + (n_tones+16) + 32``.
+			Baseband time-domain frame of length
+			``32 + 32 + 32 + (n_tones + 16 + cp_len + roll_off) + 32``.
 		"""
 		freqs = self._construct_iframe(symbols)
 		x = self._ifft(freqs)
 		x /= np.max(np.abs(x))
+		x = self._add_cp(x, self.cp_len)
+		if self.roll_off > 0:
+			x = self._apply_window(x)
 		preamble = self._generate_preamble()
-		silence = np.zeros(32, dtype=complex)
+		silence = np.zeros(64, dtype=complex)
 		return np.concatenate([silence, preamble, preamble, x, silence])
 
 	def demodulate(self, y: np.ndarray) -> np.ndarray:
 		"""
 		Demodulate a received OFDM frame back to complex data symbols.
 
-		Performs CFO correction, strips the frame header, applies an FFT,
-		equalizes via interpolated pilot estimates, and returns the
+		Performs CFO correction, strips the frame header, removes the cyclic
+		prefix, applies an FFT, equalizes via LMMSE using interpolated pilot
+		channel estimates and guard-band noise variance, and returns the
 		non-pilot data subcarriers.
 
 		Parameters
@@ -70,16 +85,13 @@ class OFDM:
 		"""
 		y_cfo = self._cancel_cfo(y)
 
-		# locate the OFDM symbol inside the (possibly large) receive buffer
-		symbol_len = self.n_tones + 16
+		# locate the CP+symbol block inside the (possibly large) receive buffer
+		symbol_len = self.n_tones + 16 + self.cp_len + self.roll_off
 		peaks = self._preamble_detect(y_cfo)
-		if len(peaks) >= 2:
-			# Two preambles found; anchor on the second (P2) — one preamble
-			# length after P2 is the data symbol start.  Using P2 rather than
-			# P1+64 is more robust: if P1 falls near a buffer boundary or its
-			# correlation is suppressed by the leading silence, P2 alone still
-			# gives the correct timing.
-			frame_start = int(peaks[1]) + 32
+		pair = self._find_preamble_pair(peaks)
+		if pair is not None:
+			# Valid P1+P2 pair found: anchor on P2.
+			frame_start = pair[1] + 32
 		elif len(peaks) == 1:
 			# Only one peak detected; assume it is P1.
 			frame_start = int(peaks[0]) + 32 + 32
@@ -87,16 +99,105 @@ class OFDM:
 			# fall back: assume y is exactly one frame
 			frame_start = 32 + 32 + 32
 		y_stripped = y_cfo[frame_start : frame_start + symbol_len]
+		y_sym = self._remove_cp(y_stripped)
 
-		freqs = np.fft.fft(y_stripped)
+		freqs = np.fft.fft(y_sym)
+		noise_var = self._estimate_noise_var(freqs)
 		h = self._estimate_channel(freqs)
-		freqs = self._equalize(freqs, h)
+		freqs = self._equalize(freqs, h, noise_var)
 		freqs = self._correct_residual_phase(freqs)
 
 		pilot_mask = np.zeros(self.n_tones, dtype=bool)
 		pilot_mask[::8] = True
 		non_guard = freqs[8:-8]
 		return non_guard[~pilot_mask]
+
+	def modulate_burst(self, symbols_matrix: np.ndarray) -> np.ndarray:
+		"""
+		Modulate multiple OFDM symbols into a single burst frame.
+
+		One preamble pair is transmitted at the head of the burst; all data
+		symbols follow back-to-back, each with its own cyclic prefix (and
+		optional cyclic suffix when ``roll_off > 0``).
+
+		Parameters
+		----------
+		symbols_matrix : ndarray, complex, shape (n_syms, data_tones)
+			Data symbols for each OFDM symbol.  Each row is passed to
+			``_construct_iframe`` independently.
+
+		Returns
+		-------
+		ndarray, complex
+			Burst frame: ``[silence | preamble | preamble | sym_0 | sym_1 |
+			... | sym_{n-1} | silence]``.
+		"""
+		blocks = []
+		for row in symbols_matrix:
+			freqs = self._construct_iframe(row)
+			x = self._ifft(freqs)
+			x_cp = self._add_cp(x, self.cp_len)
+			if self.roll_off > 0:
+				x_cp = self._apply_window(x_cp)
+			blocks.append(x_cp)
+
+		burst_body = np.concatenate(blocks)
+		peak = np.max(np.abs(burst_body))
+		if peak > 0:
+			burst_body /= peak
+
+		preamble = self._generate_preamble()
+		silence = np.zeros(32, dtype=complex)
+		return np.concatenate([silence, preamble, preamble, burst_body, silence])
+
+	def demodulate_burst(self, y: np.ndarray, n_symbols: int) -> np.ndarray:
+		"""
+		Demodulate a burst frame that contains *n_symbols* OFDM symbols.
+
+		CFO correction and timing recovery use the same preamble-based logic
+		as ``demodulate``.  Each OFDM symbol is then processed independently:
+		CP removal → FFT → noise-variance estimation → LMMSE equalization →
+		residual-phase correction.
+
+		Parameters
+		----------
+		y : ndarray, complex
+			Received burst frame.
+		n_symbols : int
+			Number of OFDM symbols in the burst.
+
+		Returns
+		-------
+		ndarray, complex, shape (n_symbols, data_tones)
+			Recovered data symbols, one row per OFDM symbol.
+		"""
+		y_cfo = self._cancel_cfo(y)
+		symbol_len = self.n_tones + 16 + self.cp_len + self.roll_off
+
+		peaks = self._preamble_detect(y_cfo)
+		pair = self._find_preamble_pair(peaks)
+		if pair is not None:
+			frame_start = pair[1] + 32
+		elif len(peaks) == 1:
+			frame_start = int(peaks[0]) + 32 + 32
+		else:
+			frame_start = 32 + 32 + 32
+
+		pilot_mask = np.zeros(self.n_tones, dtype=bool)
+		pilot_mask[::8] = True
+
+		results = []
+		for i in range(n_symbols):
+			start = frame_start + i * symbol_len
+			y_sym = self._remove_cp(y_cfo[start : start + symbol_len])
+			freqs = np.fft.fft(y_sym)
+			noise_var = self._estimate_noise_var(freqs)
+			h = self._estimate_channel(freqs)
+			freqs = self._equalize(freqs, h, noise_var)
+			freqs = self._correct_residual_phase(freqs)
+			results.append(freqs[8:-8][~pilot_mask])
+
+		return np.array(results)
 
 	# ------------------------------------------------------------------
 	# Private – modulation helpers
@@ -164,6 +265,58 @@ class OFDM:
 		"""
 		return np.concatenate([x[-cp_len:], x])
 
+	def _remove_cp(self, x: np.ndarray) -> np.ndarray:
+		"""
+		Strip the cyclic prefix (and cyclic suffix when *roll_off* > 0).
+
+		Returns the ``n_tones + 16`` sample OFDM body that is passed to the FFT.
+
+		Parameters
+		----------
+		x : ndarray
+			Received block of length ``cp_len + (n_tones + 16) + roll_off``.
+
+		Returns
+		-------
+		ndarray
+			OFDM symbol body, length ``n_tones + 16``.
+		"""
+		if self.roll_off > 0:
+			return x[self.cp_len : -self.roll_off]
+		return x[self.cp_len:]
+
+	def _apply_window(self, x: np.ndarray) -> np.ndarray:
+		"""
+		Append a cyclic suffix and apply a raised-cosine taper to reduce OOB.
+
+		The input *x* is ``[CP | symbol]``.  A cyclic suffix (CS) of length
+		``roll_off`` — a copy of the first ``roll_off`` samples of the symbol
+		body — is appended.  A raised-cosine ramp is then applied to the
+		leading ``roll_off`` samples of the CP and the trailing ``roll_off``
+		samples of the CS.  The symbol body (the FFT window at the receiver)
+		remains unmodified (window = 1), so orthogonality is preserved.
+
+		Parameters
+		----------
+		x : ndarray
+			CP-prefixed symbol, length ``cp_len + n_tones + 16``.
+
+		Returns
+		-------
+		ndarray
+			Windowed block, length ``cp_len + n_tones + 16 + roll_off``.
+		"""
+		symbol_body = x[self.cp_len:]
+		cs = symbol_body[:self.roll_off]
+		x_ext = np.concatenate([x, cs])
+
+		t = np.arange(self.roll_off) / self.roll_off
+		ramp_up = 0.5 * (1 - np.cos(np.pi * t))
+		window = np.ones(len(x_ext))
+		window[:self.roll_off] = ramp_up
+		window[-self.roll_off:] = ramp_up[::-1]
+		return x_ext * window
+
 	def _generate_preamble(self, u: int = 31, n: int = 32) -> np.ndarray:
 		"""
 		Generate a Zadoff-Chu sequence used as the synchronisation preamble.
@@ -190,12 +343,43 @@ class OFDM:
 	# Private – demodulation helpers
 	# ------------------------------------------------------------------
 
+	def _correlate(self, y: np.ndarray) -> tuple[np.ndarray, float]:
+		"""
+		Cross-correlate *y* with the ZC preamble and compute the adaptive threshold.
+
+		Separating this from ``_preamble_detect`` lets callers (e.g. a debug
+		plot in ``main.py``) inspect the raw correlation magnitude and threshold
+		without re-running the correlation a second time.
+
+		Parameters
+		----------
+		y : ndarray, complex
+			Received signal.
+
+		Returns
+		-------
+		mag : ndarray of float
+			Absolute correlation magnitude, length ``len(y) - 32 + 1``.
+		threshold : float
+			Adaptive detection threshold: ``mean(mag) + 5 * std(mag)``.
+		"""
+		preamble = self._generate_preamble()
+		corr = np.correlate(y, preamble, mode='valid')
+		mag = np.abs(corr)
+		threshold = np.mean(mag) + 5 * np.std(mag)
+		return mag, threshold
+
 	def _preamble_detect(self, y: np.ndarray) -> np.ndarray:
 		"""
-		Locate preamble occurrences via cross-correlation with an adaptive threshold.
+		Locate preamble occurrences via rising-edge detection on an adaptive threshold.
 
-		The threshold is set at ``mean(|corr|) + 5 * std(|corr|)`` to suppress
-		side-lobes while reliably detecting the main correlation peaks.
+		The adaptive threshold is ``mean(|corr|) + 5 * std(|corr|)``.  Rather
+		than returning every sample above the threshold (which yields many
+		indices per broad correlation peak), only the **rising-edge** sample —
+		the first sample where the magnitude crosses the threshold from below —
+		is returned for each peak.  This gives exactly one index per physical
+		preamble occurrence, which is required for reliable P1/P2 pair matching
+		in ``_find_preamble_pair``.
 
 		Parameters
 		----------
@@ -205,12 +389,49 @@ class OFDM:
 		Returns
 		-------
 		ndarray of int
-			Sample indices where the correlation magnitude exceeds the threshold.
+			Rising-edge sample indices, one per preamble detection.
 		"""
-		preamble = self._generate_preamble()
-		corr = np.correlate(y, preamble, mode='valid')
-		threshold = np.mean(np.abs(corr)) + 5 * np.std(np.abs(corr))
-		return np.where(np.abs(corr) > threshold)[0]
+		mag, threshold = self._correlate(y)
+
+		# Prepend False so a peak starting at index 0 is also captured.
+		above = mag > threshold
+		rising = np.where(~np.concatenate([[False], above[:-1]]) & above)[0]
+		return rising
+
+	def _find_preamble_pair(self, peaks: np.ndarray) -> tuple[int, int] | None:
+		"""
+		Find the first consecutive peak pair separated by approximately one
+		preamble length (32 samples, ±2 sample tolerance).
+
+		With a cyclic TX, the received buffer contains many correlation peaks.
+		Blindly using ``peaks[0]`` and ``peaks[1]`` fails whenever a spurious
+		peak (multipath echo, IQ-imbalance artifact, or cyclic-DMA glitch)
+		appears before the true P1.  This method scans all adjacent peak pairs
+		until it finds one within the P1→P2 spacing window, making timing and
+		CFO estimation robust to any number of spurious peaks.
+
+		A tolerance of ±2 samples is used because the rising-edge of a
+		correlation peak varies by ±1 sample depending on noise and channel
+		shape, meaning the apparent P1→P2 spacing observed from rising edges
+		can differ from the nominal 32 samples by up to ~2 samples.
+
+		Parameters
+		----------
+		peaks : ndarray of int
+			All detected correlation peak positions, sorted ascending.
+
+		Returns
+		-------
+		tuple (p1, p2) or None
+			Sample indices of P1 and P2, or ``None`` if no valid pair is found.
+		"""
+		preamble_len = 32
+		tolerance = 2
+		for i in range(len(peaks) - 1):
+			spacing = int(peaks[i + 1]) - int(peaks[i])
+			if abs(spacing - preamble_len) <= tolerance:
+				return int(peaks[i]), int(peaks[i + 1])
+		return None
 
 	def _estimate_channel(self, y_freq: np.ndarray) -> np.ndarray:
 		"""
@@ -252,15 +473,15 @@ class OFDM:
 		h_imag = np.interp(all_bins, pilot_bins, h_pilots.imag)
 		return h_real + 1j * h_imag
 
-	def _equalize(self, y_freq: np.ndarray, h: np.ndarray) -> np.ndarray:
+	def _equalize(self, y_freq: np.ndarray, h: np.ndarray, noise_var: float = 0.0) -> np.ndarray:
 		"""
-		Zero-forcing equalization: divide each subcarrier by its channel estimate.
+		LMMSE equalization per subcarrier.
 
-		``X_hat[k] = Y[k] / H[k]``
+		``X̂[k] = H*[k] · Y[k] / (|H[k]|² + noise_var)``
 
-		This inverts the channel response under the assumption that the channel
-		varies slowly across subcarriers (flat or mildly frequency-selective).
-		Noise enhancement at deep fades is the known trade-off.
+		When *noise_var* is zero this reduces to zero-forcing (``Y[k] / H[k]``).
+		A non-zero noise variance regularises the matrix inversion and suppresses
+		noise enhancement at subcarriers with small channel coefficients.
 
 		Parameters
 		----------
@@ -268,13 +489,36 @@ class OFDM:
 			Received frequency-domain subcarriers.
 		h : ndarray, complex
 			Estimated channel response, same length as *y_freq*.
+		noise_var : float
+			Per-subcarrier noise variance.  Obtain from ``_estimate_noise_var``.
 
 		Returns
 		-------
 		ndarray, complex
 			Equalized subcarrier vector.
 		"""
-		return y_freq / h
+		return np.conj(h) * y_freq / (np.abs(h) ** 2 + noise_var)
+
+	def _estimate_noise_var(self, y_freq: np.ndarray) -> float:
+		"""
+		Estimate per-subcarrier noise variance from guard-band bins.
+
+		Guard-band subcarriers carry no transmitted signal, so the received
+		power in those bins is pure noise.  The mean power across the 16
+		guard bins (8 low + 8 high) gives an unbiased estimate of ``σ²``.
+
+		Parameters
+		----------
+		y_freq : ndarray, complex
+			FFT output of the received OFDM symbol, length ``n_tones + 16``.
+
+		Returns
+		-------
+		float
+			Estimated noise variance per subcarrier.
+		"""
+		guard = np.concatenate([y_freq[:8], y_freq[-8:]])
+		return float(np.mean(np.abs(guard) ** 2))
 
 	def _correct_residual_phase(self, equalized: np.ndarray) -> np.ndarray:
 		"""
@@ -334,12 +578,12 @@ class OFDM:
 			CFO-corrected signal.
 		"""
 		peaks = self._preamble_detect(y)
-		if len(peaks) < 2:
+		pair = self._find_preamble_pair(peaks)
+		if pair is None:
 			return y
 
 		preamble_len = 32
-		p1_start = int(peaks[0])
-		p2_start = int(peaks[1])
+		p1_start, p2_start = pair
 		if p2_start + preamble_len > len(y):
 			return y
 

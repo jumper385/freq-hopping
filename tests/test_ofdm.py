@@ -76,7 +76,7 @@ class TestConstructIframe:
 class TestModulate:
     def test_frame_length(self, ofdm, symbols):
         frame = ofdm.modulate(symbols)
-        symbol_len = ofdm.n_tones + 16
+        symbol_len = ofdm.n_tones + 16 + ofdm.cp_len + ofdm.roll_off
         assert len(frame) == 32 + 32 + 32 + symbol_len + 32
 
     def test_leading_silence(self, ofdm, symbols):
