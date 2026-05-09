@@ -73,6 +73,7 @@ The script transmits a 4-symbol OFDM frame and plots the received I/Q waveform.
 - Private methods are prefixed with `_`. Do not call them from outside the class or tests that specifically target internals.
 - `OFDM` is the canonical modem. Prefer it over `OFDMModulator` for new work unless you specifically need the alternate subcarrier layout or cyclic-prefix behaviour.
 - Do not add hardware-dependent code to `OFDM.py` — it must remain importable without `pyadi-iio`.
+- Do not add more than nessesary. Whatever existing styles are in the repo, follow them. If in doubt, ask for clarification before implementing something new. especially on implementation and style of function.
 
 ---
 
