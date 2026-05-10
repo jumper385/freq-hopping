@@ -1,5 +1,9 @@
 import numpy as np
-import adi
+
+try:
+    import adi
+except Exception:  # libiio may be unavailable in non-hardware test environments
+    adi = None
 
 class PlutoSDR:
     """Minimal PlutoSDR wrapper for TX/RX over pyadi-iio."""
@@ -13,6 +17,8 @@ class PlutoSDR:
         rx_gain: int = 30,
         buffer_size: int = 1024 * 16,
     ):
+        if adi is None:
+            raise ImportError("pyadi-iio/libiio is not available; install libiio before using PlutoSDR hardware")
         self.sdr = adi.Pluto(uri=uri)
         self.sdr.sample_rate = sample_rate
         self.sdr.rx_rf_bandwidth = sample_rate
@@ -35,10 +41,15 @@ class PlutoSDR:
     def stop_transmit(self):
         self.sdr.tx_destroy_buffer()
 
-    def receive(self) -> np.ndarray:
+    def tune(self, center_freq: int) -> None:
+        """Retune both TX and RX local oscillators to the same frequency."""
+        self.sdr.rx_lo = center_freq
+        self.sdr.tx_lo = center_freq
+
+    def receive(self, flush: int = 5) -> np.ndarray:
         """Capture one buffer of complex samples, normalised to ±1."""
 
-        for _ in range(5):
+        for _ in range(flush):
             self.sdr.rx()
 
         samples = self.sdr.rx()

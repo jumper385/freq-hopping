@@ -74,6 +74,11 @@ class TestInit:
         assert mock_pluto.rx_hardwaregain_chan0 == 50
         assert mock_pluto.rx_buffer_size == 4096
 
+    def test_tune_updates_rx_and_tx_lo(self, mock_pluto, sdr):
+        sdr.tune(916_000_000)
+        assert mock_pluto.rx_lo == 916_000_000
+        assert mock_pluto.tx_lo == 916_000_000
+
 
 # ------------------------------------------------------------------
 # transmit
@@ -114,9 +119,14 @@ class TestTransmit:
 # ------------------------------------------------------------------
 
 class TestReceive:
-    def test_calls_sdr_rx(self, mock_pluto, sdr):
+    def test_calls_sdr_rx_after_default_flushes(self, mock_pluto, sdr):
         mock_pluto.rx.return_value = np.zeros(16, dtype=complex)
         sdr.receive()
+        assert mock_pluto.rx.call_count == 6
+
+    def test_flush_can_be_disabled(self, mock_pluto, sdr):
+        mock_pluto.rx.return_value = np.zeros(16, dtype=complex)
+        sdr.receive(flush=0)
         mock_pluto.rx.assert_called_once()
 
     def test_normalises_by_2_14(self, mock_pluto, sdr):

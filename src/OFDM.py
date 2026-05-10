@@ -61,7 +61,7 @@ class OFDM:
 		if self.roll_off > 0:
 			x = self._apply_window(x)
 		preamble = self._generate_preamble()
-		silence = np.zeros(64, dtype=complex)
+		silence = np.zeros(32, dtype=complex)
 		return np.concatenate([silence, preamble, preamble, x, silence])
 
 	def demodulate(self, y: np.ndarray) -> np.ndarray:
