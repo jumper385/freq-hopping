@@ -1,4 +1,17 @@
 import numpy as np
+from dataclasses import dataclass
+
+
+@dataclass
+class AcquisitionMeta:
+    """Structured result from OFDM.acquire()."""
+    valid: bool
+    p1: int | None = None
+    p2: int | None = None
+    peak_count: int = 0
+    peak_margin: float = 0.0
+    cfo_norm: float = 0.0
+    reason: str = ""
 
 
 class OFDM:
@@ -655,3 +668,70 @@ class OFDM:
 
 		n = np.arange(len(y))
 		return y * np.exp(-1j * 2 * np.pi * cfo_norm * n)
+
+	# ------------------------------------------------------------------
+	# Public — acquisition / lock-quality gating
+	# ------------------------------------------------------------------
+
+	def acquire(self, y: np.ndarray, min_margin: float = 2.5,
+	            max_cfo_norm: float | None = None) -> AcquisitionMeta:
+		"""Detect preamble and return structured lock-quality metadata.
+
+		This is the single entry‑point for deciding whether a received burst
+		contains a usable OFDM frame.  The two‑stage gate first checks the
+		Zadoff‑Chu correlation margin, then optionally validates the
+		Schmidl‑Cox CFO estimate against an implausibility bound.
+
+		Parameters
+		----------
+		y : ndarray, complex
+			Received baseband signal.
+		min_margin : float
+			Minimum peak‑max / adaptive‑threshold ratio for the ZC stage.
+		max_cfo_norm : float or None
+			Maximum |CFO| in cycles/sample for the S&C sanity stage.
+			``None`` disables the CFO gate.  At 1 MSPS, ``0.002`` ≈ 2000 Hz
+			rejects ±15 kHz false‑lock outliers while accepting real
+			±0‑1000 Hz locks across independent PlutoSDRs.
+
+		Returns
+		-------
+		AcquisitionMeta
+			Structured result with ``valid`` flag and diagnostic fields.
+		"""
+		y_cfo = self._cancel_cfo(y)
+		corr_mag, threshold = self._correlate(y_cfo)
+		peaks = self._preamble_detect(y_cfo)
+		pair = self._find_preamble_pair(peaks)
+		peak_max = float(np.max(corr_mag)) if len(corr_mag) else 0.0
+		margin = peak_max / float(threshold) if threshold > 0 else 0.0
+
+		if pair is None and len(peaks) < 1:
+			return AcquisitionMeta(valid=False, peak_count=len(peaks),
+			                       peak_margin=margin, reason="no peaks")
+		if pair is None:
+			return AcquisitionMeta(valid=False, peak_count=len(peaks),
+			                       peak_margin=margin,
+			                       reason=f"no valid P1/P2 pair ({len(peaks)} peaks)")
+		if margin < min_margin:
+			return AcquisitionMeta(valid=False, p1=pair[0], p2=pair[1],
+			                       peak_count=len(peaks), peak_margin=margin,
+			                       reason=f"low margin {margin:.2f} < {min_margin}")
+
+		# CFO from the pair we used
+		preamble_len = 32
+		r1 = y_cfo[pair[0]: pair[0] + preamble_len]
+		r2 = y_cfo[pair[1]: pair[1] + preamble_len]
+		phi = np.angle(np.sum(r2 * np.conj(r1)))
+		cfo_norm = phi / (2 * np.pi * preamble_len)
+
+		# CFO sanity gate: reject false locks with implausible CFO
+		if max_cfo_norm is not None and abs(cfo_norm) > max_cfo_norm:
+			return AcquisitionMeta(valid=False, p1=pair[0], p2=pair[1],
+			                       peak_count=len(peaks), peak_margin=margin,
+			                       cfo_norm=cfo_norm,
+			                       reason=f"CFO outlier |{cfo_norm:.6f}| > {max_cfo_norm}")
+
+		return AcquisitionMeta(valid=True, p1=pair[0], p2=pair[1],
+		                       peak_count=len(peaks), peak_margin=margin,
+		                       cfo_norm=cfo_norm, reason="ok")
