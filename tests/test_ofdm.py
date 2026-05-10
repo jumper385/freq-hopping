@@ -118,6 +118,24 @@ class TestPreambleDetect:
 
 
 # ------------------------------------------------------------------
+# _find_all_preamble_pairs
+# ------------------------------------------------------------------
+
+class TestFindAllPreamblePairs:
+    def test_returns_all_consecutive_pairs_within_tolerance(self, ofdm):
+        peaks = np.array([10, 42, 74, 120, 151])
+        assert ofdm._find_all_preamble_pairs(peaks) == [(10, 42), (42, 74), (120, 151)]
+
+    def test_rejects_nonconsecutive_or_out_of_tolerance_pairs(self, ofdm):
+        peaks = np.array([10, 41, 80, 112])
+        assert ofdm._find_all_preamble_pairs(peaks) == [(10, 41), (80, 112)]
+
+    def test_single_candidate_api_still_returns_first_pair(self, ofdm):
+        peaks = np.array([10, 42, 74])
+        assert ofdm._find_preamble_pair(peaks) == (10, 42)
+
+
+# ------------------------------------------------------------------
 # _cancel_cfo
 # ------------------------------------------------------------------
 

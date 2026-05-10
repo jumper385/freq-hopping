@@ -504,9 +504,12 @@ class OFDM:
 		Return all consecutive peak pairs separated by approximately one
 		preamble length (32 samples, ±2 sample tolerance), in scan order.
 
-		This is used by ``acquire`` when multi‑candidate acquisition is needed:
-		the first candidate may be a false lock (e.g. stale cyclic‑DMA data),
-		but a later candidate in the same buffer may be a valid frame.
+		This keeps the candidate-enumeration infrastructure available for a
+		future multi-candidate ``acquire`` path: the first candidate may be a
+		false lock (e.g. stale cyclic-DMA data), but a later candidate in the
+		same buffer may be a valid frame.  The current public ``acquire`` path
+		intentionally remains single-candidate until that fallback is validated
+		on hardware.
 
 		Parameters
 		----------
