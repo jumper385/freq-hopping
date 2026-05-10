@@ -63,12 +63,18 @@ class AcquisitionMeta:
     reason: str = ""
 
 
-def acquire(ofdm: OFDM, y: np.ndarray, min_margin: float = 2.5) -> AcquisitionMeta:
+def acquire(ofdm: OFDM, y: np.ndarray, min_margin: float = 2.5,
+            max_cfo_norm: float | None = None) -> AcquisitionMeta:
     """Acquire preamble and return validity metadata.
 
     *min_margin* is the peak‑max / threshold ratio required for a valid lock.
     Below this the packet is considered un‑acquired and the burst should be
     rejected before computing SER/reward.
+
+    *max_cfo_norm* is an optional upper bound on |cfo| in cycles/sample.
+    When set, bursts whose Schmidl-Cox CFO estimate exceeds this bound are
+    rejected as false locks (e.g. 0.002 cycles/sample ≈ 2000 Hz at 1 MSPS
+    rejects ±14-15 kHz false-lock outliers while accepting real ±0-1000 Hz locks).
     """
     y_cfo = ofdm._cancel_cfo(y)
     corr_mag, threshold = ofdm._correlate(y_cfo)
@@ -94,6 +100,13 @@ def acquire(ofdm: OFDM, y: np.ndarray, min_margin: float = 2.5) -> AcquisitionMe
     r2 = y_cfo[pair[1]: pair[1] + preamble_len]
     phi = np.angle(np.sum(r2 * np.conj(r1)))
     cfo_norm = phi / (2 * np.pi * preamble_len)
+
+    # CFO sanity gate: reject false locks with implausible CFO
+    if max_cfo_norm is not None and abs(cfo_norm) > max_cfo_norm:
+        return AcquisitionMeta(valid=False, p1=pair[0], p2=pair[1],
+                               peak_count=len(peaks), peak_margin=margin,
+                               cfo_norm=cfo_norm,
+                               reason=f"CFO outlier |{cfo_norm:.6f}| > {max_cfo_norm}")
 
     return AcquisitionMeta(valid=True, p1=pair[0], p2=pair[1],
                            peak_count=len(peaks), peak_margin=margin,
@@ -129,6 +142,11 @@ def main() -> int:
                    help="iterations per configuration")
     p.add_argument("--min-margin", type=float, default=2.5,
                    help="min ZC peak/threshold ratio for valid lock")
+    p.add_argument("--max-cfo", type=float, default=2000,
+                   help="max |CFO| in Hz for valid lock (0 to disable); "
+                   "rejects false locks with implausible Schmidl-Cox estimates. "
+                   "Default 2000 Hz rejects ±15 kHz false-lock outliers while "
+                   "accepting real ±0-1000 Hz CFO across independent PlutoSDRs")
     p.add_argument("--sweep", action="append", default=[],
                    help="param=val1,...,valN sweep (e.g. bursts=1,5,10,20)")
     p.add_argument("--out", default="results/throughput_benchmark.csv")
@@ -218,7 +236,11 @@ def main() -> int:
             y = rx.receive()
             t_cap = time.perf_counter()
 
-            meta = acquire(ofdm, y, min_margin=args.min_margin)
+            max_cfo_norm = None
+            if args.max_cfo is not None and args.max_cfo > 0:
+                max_cfo_norm = args.max_cfo / args.sample_rate
+            meta = acquire(ofdm, y, min_margin=args.min_margin,
+                           max_cfo_norm=max_cfo_norm)
 
             if meta.valid:
                 recovered = ofdm.demodulate_burst(y, cfg["bursts"])

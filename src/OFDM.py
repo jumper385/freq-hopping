@@ -423,7 +423,8 @@ class OFDM:
 		preamble = self._generate_preamble()
 		corr = np.correlate(y, preamble, mode='valid')
 		mag = np.abs(corr)
-		threshold = np.mean(mag) + 5 * np.std(mag)
+		threshold = np.mean(mag) + 4 * np.std(mag)
+		# threshold = 5 * np.std(mag)
 		return mag, threshold
 
 	def _preamble_detect(self, y: np.ndarray) -> np.ndarray:
