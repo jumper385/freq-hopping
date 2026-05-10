@@ -1,6 +1,6 @@
 # Frozen PlutoSDR Results Analysis — 2026-05-10
 
-This analysis uses only the frozen CSV files from the 2026-05-10 PlutoSDR bring-up checkpoint. No additional SDR experiments were run.
+This analysis uses only the frozen CSV files from the 2026-05-10 PlutoSDR bring-up checkpoint. No additional SDR experiments were run. The devices were connected by coax for these experiments, so the results are controlled bench measurements of the modem, retuning, synchronisation, and reward loop rather than over-the-air, antenna, multipath, or anti-jamming evidence.
 
 ## Generated plots
 
@@ -27,7 +27,7 @@ This analysis uses only the frozen CSV files from the 2026-05-10 PlutoSDR bring-
 
 ## Interpretation
 
-1. **The basic PlutoSDR OFDM/QPSK link is working.** The clean fixed-link -50 dB run stayed between 0% and 6.51% SER over 10 bursts, substantially better than the -60 dB run, which had a 76.28% acquisition/timing outlier.
+1. **The basic PlutoSDR OFDM/QPSK cabled link is working.** The clean fixed-link -50 dB run stayed between 0% and 6.51% SER over 10 bursts, substantially better than the -60 dB run, which had a 76.28% acquisition/timing outlier.
 2. **Frequency hopping works at the bring-up level.** The -50 dB three-channel hop loop achieved 1.84% mean SER over 12 hops with no severe outlier, while sequential TX+RX retuning averaged about 7.98 ms.
 3. **The first hardware-in-the-loop MAB path is functional.** UCB selected channels, retuned both radios, demodulated bursts, converted SER to reward, and updated online. The 18-hop run had 6.41% mean SER including one clear timing/acquisition outlier; excluding abnormal peak-count cases gives a representative SER near the low-single-digit range.
 4. **Acquisition confidence needs to become part of the reward gate.** Outliers correlate with abnormal preamble peak counts (e.g. 64 peaks), so packet validity should be separated from channel quality before comparing algorithms.
@@ -35,8 +35,8 @@ This analysis uses only the frozen CSV files from the 2026-05-10 PlutoSDR bring-
 
 ## Claim coverage impact
 
-- **C5 (OFDM/QPSK suitability): strengthened but not complete.** Frozen data supports feasibility of OFDM/QPSK at 915 MHz; controlled BLER/PER and interference tests are still needed.
-- **C7 (PlutoSDR can support useful MAB-FH): strengthened.** Both fixed-link and hopping runs worked on two Plutos. Useful hop rate must be bounded by measured retune/capture/acquisition timing.
+- **C5 (OFDM/QPSK suitability): strengthened but not complete.** Frozen coaxial data supports feasibility of the OFDM/QPSK modem and receiver chain at 915 MHz; OTA, controlled BLER/PER, and interference tests are still needed.
+- **C7 (PlutoSDR can support useful MAB-FH): strengthened for bench control-path feasibility.** Both fixed-link and hopping runs worked on two cabled Plutos. Useful hop rate must be bounded by measured retune/capture/acquisition timing; OTA robustness remains untested.
 - **C10 (MAB-FH beats static/random): not yet covered by hardware.** Only UCB was run live. Need side-by-side frozen-protocol trials with static/random/UCB/TS/EXP3 and a controlled interferer.
 - **C13/C14/C15 (BLER/throughput targets): still uncovered.** Current SER proxy is useful for bring-up but is not packet BLER or throughput.
 - **C18/C27/C30 (preamble/acquisition pipeline): strengthened.** ZC/OFDM acquisition works often enough for bring-up, but abnormal peak counts show packet-validity gating is necessary.
