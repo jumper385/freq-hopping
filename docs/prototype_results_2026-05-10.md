@@ -106,3 +106,32 @@ Interpretation: increasing TX level by 10 dB substantially improved stability wi
 2. Sweep TX attenuation and RX gain to map SER vs link margin.
 3. Measure retune timing with TX/RX retunes overlapped or minimised, if architecture permits.
 4. Add ACK/PER-style reward logging so the MAB agent can use real hardware rewards.
+
+## Live MAB Reward Loop
+
+### UCB, 914–916 MHz, TX gain -50 dB
+
+Command:
+
+```bash
+python scripts/live_mab_loop.py --tx-uri ip:192.168.8.94 --rx-uri ip:192.168.8.93 --freqs 914000000,915000000,916000000 --agent ucb --tx-gain -50 --hops 18 --settle-ms 5 --out results/live_mab_ucb_914_916mhz_txm50.csv
+```
+
+Result:
+
+- Reward definition: `reward = 1 - SER`
+- Mean SER: 6.41% including one timing/acquisition outlier
+- Mean reward: 0.936
+- Mean sequential TX+RX retune: 7.68 ms
+- Mean capture time: 88.01 ms
+- Mean demod time: 1.97 ms
+- Preamble peak-margin mean: 2.72× threshold
+
+Interpretation: the first hardware-in-the-loop MAB control path is functional: the agent selects a channel, both SDRs retune, an OFDM/QPSK burst is captured/demodulated, SER is converted into a bounded reward, and the agent updates online. The outlier at hop 8 (76.28% SER, 64 detected peaks) shows that timing/acquisition confidence must be logged and possibly folded into the reward or packet-validity gate.
+
+## Updated Next Tests
+
+1. Add packet-validity gating: if preamble pair is ambiguous or peak count is abnormal, mark packet invalid rather than treating SER alone as link quality.
+2. Run side-by-side static/random/UCB/TS/EXP3 hardware trials over identical channel lists and durations.
+3. Add a controlled interferer/jammer source so MAB decisions respond to real channel variation rather than mostly stationary link margin.
+4. Replace SER proxy with packet-level PER/ACK reward once packet framing/checksum is added.
