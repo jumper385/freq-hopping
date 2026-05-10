@@ -115,21 +115,31 @@ def main() -> int:
             time.sleep(args.settle_ms / 1000.0)
             y = rx.receive()
             t2 = time.perf_counter_ns()
-            recovered = ofdm.demodulate_burst(y, args.symbols)
+            metrics = corr_metrics(ofdm, y)
+            valid = True
+            error = ""
+            try:
+                recovered = ofdm.demodulate_burst(y, args.symbols)
+                rx_dec = qpsk_decide(recovered.flatten())
+                ser = float(np.mean(rx_dec != tx_dec))
+                reward = float(np.clip(1.0 - ser, 0.0, 1.0))
+            except Exception as exc:
+                valid = False
+                error = type(exc).__name__
+                ser = 1.0
+                reward = 0.0
             t3 = time.perf_counter_ns()
 
-            rx_dec = qpsk_decide(recovered.flatten())
-            ser = float(np.mean(rx_dec != tx_dec))
-            reward = float(np.clip(1.0 - ser, 0.0, 1.0))
             agent.update(arm, reward)
             cumulative_reward += reward
-            metrics = corr_metrics(ofdm, y)
 
             row = {
                 "hop": hop,
                 "agent": args.agent,
                 "arm": arm,
                 "freq_hz": freq,
+                "valid": valid,
+                "error": error,
                 "ser": ser,
                 "reward": reward,
                 "cumulative_reward": cumulative_reward,
@@ -139,9 +149,10 @@ def main() -> int:
                 **metrics,
             }
             rows.append(row)
+            status = "ok" if valid else f"invalid:{error}"
             print(
                 f"hop {hop:03d} {args.agent} arm={arm} {freq/1e6:.3f} MHz: "
-                f"SER={ser:.2%}, reward={reward:.3f}, margin={metrics['peak_margin']:.2f}"
+                f"{status}, SER={ser:.2%}, reward={reward:.3f}, margin={metrics['peak_margin']:.2f}"
             )
     finally:
         try:

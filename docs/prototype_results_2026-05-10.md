@@ -166,3 +166,26 @@ Review priority:
 1. Use the frozen CSVs for plots and proposal figures.
 2. Do not mix later experiments into this dataset unless a new dated run folder/checkpoint is created.
 3. Treat the clean `-50 dB` runs as the representative bring-up dataset.
+
+## Close-Range Antenna OTA Follow-Up
+
+After the frozen coaxial dataset, the coax connection was replaced with two nearby antennas and the same bring-up tests were repeated. These runs are intentionally tracked as a separate OTA dataset rather than mixed with the coax baseline.
+
+Files:
+
+- `results/link_smoke_ota_close_915mhz_txm60.csv`
+- `results/link_smoke_ota_close_915mhz_txm50.csv`
+- `results/link_smoke_ota_close_915mhz_txm40.csv`
+- `results/fh_loop_ota_close_914_916mhz_txm50.csv`
+- `results/fh_loop_ota_close_914_916mhz_txm40.csv`
+- `results/live_mab_ucb_ota_close_914_916mhz_txm40.csv`
+- Analysis: `docs/ota_close_results_analysis_2026-05-10.md`
+
+Key result: the close-range antenna link did **not** acquire reliably at `-60`, `-50`, or `-40 dB` TX attenuation. SER stayed around 70–80%, and detected ZC preamble peaks were near 0–3 rather than the ~32 peak pattern seen in the coax runs.
+
+Interpretation: this does not invalidate the coax result. Instead, it separates the milestones clearly:
+
+1. Coax result: modem, SDR retuning, logging, and MAB reward-loop architecture work under a controlled cabled RF path.
+2. Antenna result: the current OTA receiver/acquisition setup is not yet robust enough, even at close range, to support meaningful MAB algorithm comparison.
+
+Immediate blocker: OTA acquisition/link bring-up. Before further MAB comparisons, debug antenna orientation/matching, RX gain, TX power, thresholding, timing detection, and packet-validity gating.
