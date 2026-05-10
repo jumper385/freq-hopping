@@ -496,13 +496,36 @@ class OFDM:
 		tuple (p1, p2) or None
 			Sample indices of P1 and P2, or ``None`` if no valid pair is found.
 		"""
+		pairs = self._find_all_preamble_pairs(peaks)
+		return pairs[0] if pairs else None
+
+	def _find_all_preamble_pairs(self, peaks: np.ndarray) -> list[tuple[int, int]]:
+		"""
+		Return all consecutive peak pairs separated by approximately one
+		preamble length (32 samples, ±2 sample tolerance), in scan order.
+
+		This is used by ``acquire`` when multi‑candidate acquisition is needed:
+		the first candidate may be a false lock (e.g. stale cyclic‑DMA data),
+		but a later candidate in the same buffer may be a valid frame.
+
+		Parameters
+		----------
+		peaks : ndarray of int
+			All detected correlation peak positions, sorted ascending.
+
+		Returns
+		-------
+		list of (p1, p2) tuples
+			May be empty if no pair is found.
+		"""
 		preamble_len = 32
 		tolerance = 2
+		pairs = []
 		for i in range(len(peaks) - 1):
 			spacing = int(peaks[i + 1]) - int(peaks[i])
 			if abs(spacing - preamble_len) <= tolerance:
-				return int(peaks[i]), int(peaks[i + 1])
-		return None
+				pairs.append((int(peaks[i]), int(peaks[i + 1])))
+		return pairs
 
 	def _estimate_channel(self, y_freq: np.ndarray) -> np.ndarray:
 		"""
@@ -712,7 +735,7 @@ class OFDM:
 		if pair is None:
 			return AcquisitionMeta(valid=False, peak_count=len(peaks),
 			                       peak_margin=margin,
-			                       reason=f"no valid P1/P2 pair ({len(peaks)} peaks)")
+			                       reason=f"no P1/P2 pair ({len(peaks)} peaks)")
 		if margin < min_margin:
 			return AcquisitionMeta(valid=False, p1=pair[0], p2=pair[1],
 			                       peak_count=len(peaks), peak_margin=margin,
