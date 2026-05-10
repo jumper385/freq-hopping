@@ -135,3 +135,34 @@ Interpretation: the first hardware-in-the-loop MAB control path is functional: t
 2. Run side-by-side static/random/UCB/TS/EXP3 hardware trials over identical channel lists and durations.
 3. Add a controlled interferer/jammer source so MAB decisions respond to real channel variation rather than mostly stationary link margin.
 4. Replace SER proxy with packet-level PER/ACK reward once packet framing/checksum is added.
+
+## Experiment Freeze Note
+
+As of this checkpoint, data collection is frozen for review. Do not run additional SDR experiments or change test configuration until Henry explicitly reopens collection.
+
+Frozen configuration:
+
+- RX PlutoSDR: `ip:192.168.8.93`
+- TX PlutoSDR: `ip:192.168.8.94`
+- Frequencies used: 914 MHz, 915 MHz, 916 MHz
+- Sample rate: 1 MSPS
+- TX attenuation/gain used for clean runs: `-50 dB`
+- RX gain: 30 dB manual
+- OFDM settings: `cp_len=16`, `roll_off=8`, 10 OFDM symbols per burst for smoke/live loop scripts
+- Reward definition for live MAB checkpoint: `reward = 1 - SER`
+
+Frozen result files currently available locally under ignored `results/`:
+
+- `rx_retune_benchmark.csv`
+- `tx_retune_benchmark.csv`
+- `link_smoke_915mhz.csv`
+- `link_smoke_915mhz_txm50.csv`
+- `fh_loop_914_916mhz.csv`
+- `fh_loop_914_916mhz_txm50.csv`
+- `live_mab_ucb_914_916mhz_txm50.csv`
+
+Review priority:
+
+1. Use the frozen CSVs for plots and proposal figures.
+2. Do not mix later experiments into this dataset unless a new dated run folder/checkpoint is created.
+3. Treat the clean `-50 dB` runs as the representative bring-up dataset.
