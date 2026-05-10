@@ -34,9 +34,7 @@ UPDATE_MS   = 50      # target plot refresh interval in milliseconds
 # ---------------------------------------------------------------------------
 ofdm = OFDM(cp_len=CP_LEN, roll_off=ROLL_OFF)
 
-pilot_mask = np.zeros(ofdm.n_tones, dtype=bool)
-pilot_mask[::8] = True
-data_tones = int(np.count_nonzero(~pilot_mask))
+data_tones = ofdm.data_tone_count
 
 # rx_sdr = PlutoSDR(uri="usb:", rx_gain=30)
 # tx_sdr = PlutoSDR(uri="ip:192.168.8.93", tx_gain=0)

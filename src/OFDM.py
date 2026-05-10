@@ -35,6 +35,63 @@ class OFDM:
 		self.roll_off = roll_off
 
 	# ------------------------------------------------------------------
+	# Public API – link budget / throughput helpers
+	# ------------------------------------------------------------------
+
+	@property
+	def fft_len(self) -> int:
+		"""FFT length in samples/bins, including active tones and guard bands."""
+		return self.n_tones + 16
+
+	@property
+	def data_tone_count(self) -> int:
+		"""Number of payload-carrying tones after pilot removal."""
+		pilot_mask = np.zeros(self.n_tones, dtype=bool)
+		pilot_mask[::8] = True
+		return int(np.count_nonzero(~pilot_mask))
+
+	@property
+	def symbol_block_len(self) -> int:
+		"""Samples per CP-prefixed OFDM data symbol, excluding preambles/silence."""
+		return self.fft_len + self.cp_len + self.roll_off
+
+	@property
+	def sync_overhead_len(self) -> int:
+		"""Samples consumed by leading silence, dual preamble, and trailing silence."""
+		return 32 + 32 + 32 + 32
+
+	def frame_len(self, n_symbols: int = 1) -> int:
+		"""Total samples in a single-frame/burst containing *n_symbols* OFDM symbols."""
+		if n_symbols < 1:
+			raise ValueError("n_symbols must be >= 1")
+		return self.sync_overhead_len + n_symbols * self.symbol_block_len
+
+	def payload_bits_per_frame(self, bits_per_symbol: int = 2, n_symbols: int = 1) -> int:
+		"""Payload bits carried by one frame/burst for a given constellation order."""
+		if bits_per_symbol < 1:
+			raise ValueError("bits_per_symbol must be >= 1")
+		if n_symbols < 1:
+			raise ValueError("n_symbols must be >= 1")
+		return self.data_tone_count * bits_per_symbol * n_symbols
+
+	def theoretical_throughput_bps(
+		self,
+		sample_rate: float = 1_000_000,
+		bits_per_symbol: int = 2,
+		n_symbols: int = 1,
+	) -> float:
+		"""
+		Return ideal payload throughput for the baseband frame format.
+
+		This is a framing-only metric: it assumes every payload symbol is decoded
+		correctly and does not include SDR retune latency, stale-buffer flushing,
+		Python loop overhead, packet erasures, retransmission, or FEC overhead.
+		"""
+		if sample_rate <= 0:
+			raise ValueError("sample_rate must be > 0")
+		return self.payload_bits_per_frame(bits_per_symbol, n_symbols) * sample_rate / self.frame_len(n_symbols)
+
+	# ------------------------------------------------------------------
 	# Public API
 	# ------------------------------------------------------------------
 

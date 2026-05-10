@@ -24,9 +24,7 @@ def qpsk_decide(x: np.ndarray) -> np.ndarray:
 
 
 def make_payload(ofdm: OFDM, n_symbols: int, seed: int) -> np.ndarray:
-    pilot_mask = np.zeros(ofdm.n_tones, dtype=bool)
-    pilot_mask[::8] = True
-    data_tones = int(np.count_nonzero(~pilot_mask))
+    data_tones = ofdm.data_tone_count
     rng = np.random.default_rng(seed)
     return (
         rng.choice([-1, 1], size=(n_symbols, data_tones))

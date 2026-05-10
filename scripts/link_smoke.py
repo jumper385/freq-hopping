@@ -34,9 +34,7 @@ def main() -> int:
     args = p.parse_args()
 
     ofdm = OFDM(cp_len=16, roll_off=8)
-    pilot_mask = np.zeros(ofdm.n_tones, dtype=bool)
-    pilot_mask[::8] = True
-    data_tones = int(np.count_nonzero(~pilot_mask))
+    data_tones = ofdm.data_tone_count
 
     tx = PlutoSDR(args.tx_uri, center_freq=args.freq, sample_rate=args.sample_rate, tx_gain=args.tx_gain, rx_gain=args.rx_gain)
     rx = PlutoSDR(args.rx_uri, center_freq=args.freq, sample_rate=args.sample_rate, tx_gain=args.tx_gain, rx_gain=args.rx_gain)

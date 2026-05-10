@@ -20,9 +20,7 @@ def main():
     ofdm = OFDM(cp_len=CP_LEN, roll_off=ROLL_OFF)
 
     # Number of data tones per symbol (pilots excluded)
-    pilot_mask = np.zeros(ofdm.n_tones, dtype=bool)
-    pilot_mask[::8] = True
-    data_tones = int(np.count_nonzero(~pilot_mask))
+    data_tones = ofdm.data_tone_count
 
     # two radios: USB-attached TX, IP-attached RX
     rx_sdr = PlutoSDR(uri="usb:", tx_gain=-20)
