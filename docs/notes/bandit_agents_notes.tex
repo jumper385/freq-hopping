@@ -1,0 +1,220 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.0cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+
+\hypersetup{colorlinks=true, linkcolor=blue!45!black, urlcolor=blue!45!black}
+\setlist[itemize]{topsep=2pt,itemsep=2pt,parsep=0pt}
+\setlist[enumerate]{topsep=2pt,itemsep=2pt,parsep=0pt}
+
+\definecolor{deepblue}{RGB}{25,70,120}
+\definecolor{softblue}{RGB}{235,244,255}
+\definecolor{softgreen}{RGB}{238,248,240}
+\definecolor{softorange}{RGB}{255,246,232}
+\definecolor{softred}{RGB}{255,238,238}
+
+\tcbset{colback=white,colframe=deepblue!70!black,arc=2mm,boxrule=0.7pt,left=6pt,right=6pt,top=5pt,bottom=5pt}
+\newtcolorbox{intuitionbox}{colback=softblue,colframe=deepblue,title=Intuition,fonttitle=\bfseries}
+\newtcolorbox{implbox}{colback=softgreen,colframe=green!45!black,title=Implementation mapping,fonttitle=\bfseries}
+\newtcolorbox{cautionbox}{colback=softorange,colframe=orange!70!black,title=Important caveat,fonttitle=\bfseries}
+\newtcolorbox{resultbox}{colback=softred,colframe=red!60!black,title=What the current experiment proves,fonttitle=\bfseries}
+
+\title{Bandit Agents for Frequency-Hopping SDR\\\large UCB, Thompson Sampling, and EXP3 Notes}
+\author{Henry Chen --- SDR/RL Frequency-Hopping Thesis Notes}
+\date{Draft notes sheet --- \today}
+
+\begin{document}
+\maketitle
+
+\section*{Problem Setup}
+
+In this project, each available frequency channel is treated as a \textbf{bandit arm}. On each hop, the agent selects one channel, the radios tune to that channel, a known OFDM/QPSK burst is received and demodulated, and the receiver computes a reward from the measured symbol error rate (SER):
+\begin{equation}
+    r = 1 - \mathrm{SER}, \qquad 0 \le r \le 1.
+\end{equation}
+A clean demodulation gives low SER and therefore reward near 1. A failed or poor demodulation gives reward near 0.
+
+\begin{cautionbox}
+The current frozen hardware data was collected with the two PlutoSDRs connected by \textbf{coax}. This validates the modem, retuning, logging, and reward-loop architecture under a controlled bench channel. It does \emph{not} yet prove over-the-air robustness, antenna performance, multipath performance, or anti-jamming behaviour.
+\end{cautionbox}
+
+\section{Upper Confidence Bound (UCB)}
+
+\begin{intuitionbox}
+UCB is optimistic. It chooses channels that have worked well, but it also gives a temporary bonus to channels that have not been tried much. A channel can therefore be selected for two reasons: either its measured average reward is high, or the agent is still uncertain about it. This makes UCB a strong baseline for mostly stationary channels.
+\end{intuitionbox}
+
+For channel $i$, UCB stores:
+\begin{itemize}
+    \item $N_i$: number of times channel $i$ has been selected,
+    \item $\hat{\mu}_i$: average reward observed on channel $i$,
+    \item $t$: total number of updates.
+\end{itemize}
+After each channel has been tried at least once, UCB selects the channel with the largest score
+\begin{equation}
+    \mathrm{score}_i = \hat{\mu}_i + c\sqrt{\frac{\ln(t+1)}{N_i}}.
+\end{equation}
+The first term exploits channels that have worked well. The second term explores channels that have limited evidence. The constant $c$ controls how aggressively the agent explores.
+
+\begin{algorithm}[H]
+\caption{UCB Channel Selection}
+\begin{algorithmic}[1]
+\State Initialise $N_i \gets 0$ and $\hat{\mu}_i \gets 0$ for every channel $i$
+\State Initialise $t \gets 0$
+\For{each hop}
+    \If{there exists a channel $i$ with $N_i = 0$}
+        \State Select an untried channel $a \gets i$
+    \Else
+        \For{each channel $i$}
+            \State $b_i \gets c\sqrt{\ln(t+1)/N_i}$
+            \State $s_i \gets \hat{\mu}_i + b_i$
+        \EndFor
+        \State Select $a \gets \arg\max_i s_i$
+    \EndIf
+    \State Tune TX and RX to channel $a$
+    \State Measure reward $r$
+    \State $t \gets t + 1$
+    \State $N_a \gets N_a + 1$
+    \State $\hat{\mu}_a \gets \hat{\mu}_a + \dfrac{r - \hat{\mu}_a}{N_a}$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{implbox}
+In the current code, \texttt{UCBAgent} stores \texttt{counts} as $N_i$ and \texttt{values} as $\hat{\mu}_i$. The \texttt{select()} method first returns untried arms. Once all arms have been tried, it computes the UCB score vector and returns the index of the maximum score. The \texttt{update()} method performs an incremental mean update, so the agent does not need to store the full reward history.
+\end{implbox}
+
+\section{Thompson Sampling}
+
+\begin{intuitionbox}
+Thompson Sampling is probabilistic. Instead of keeping only one average reward per channel, it keeps a belief distribution over how good each channel might be. On each hop, it samples one possible quality value from each channel's belief distribution and chooses the channel with the highest sample. Uncertain channels naturally get explored because their distributions are wider.
+\end{intuitionbox}
+
+The current implementation uses a Beta distribution for each channel:
+\begin{equation}
+    \theta_i \sim \mathrm{Beta}(\alpha_i,\beta_i).
+\end{equation}
+Each channel starts with $\alpha_i=1$ and $\beta_i=1$, which is a uniform prior. After receiving reward $r\in[0,1]$, the chosen channel is updated as
+\begin{align}
+    \alpha_a &\gets \alpha_a + r,\\
+    \beta_a  &\gets \beta_a + (1-r).
+\end{align}
+A high reward increases $\alpha$, making high future samples more likely. A low reward increases $\beta$, making low future samples more likely.
+
+\begin{algorithm}[H]
+\caption{Thompson Sampling Channel Selection}
+\begin{algorithmic}[1]
+\State Initialise $\alpha_i \gets 1$ and $\beta_i \gets 1$ for every channel $i$
+\For{each hop}
+    \For{each channel $i$}
+        \State Draw $\theta_i \sim \mathrm{Beta}(\alpha_i,\beta_i)$
+    \EndFor
+    \State Select $a \gets \arg\max_i \theta_i$
+    \State Tune TX and RX to channel $a$
+    \State Measure reward $r \in [0,1]$
+    \State $\alpha_a \gets \alpha_a + r$
+    \State $\beta_a \gets \beta_a + (1-r)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{implbox}
+In the current code, \texttt{ThompsonSamplingAgent} stores arrays \texttt{alpha} and \texttt{beta}. The \texttt{select()} method draws one Beta sample per channel and selects the channel with the largest draw. The \texttt{update()} method clips the measured reward into $[0,1]$, then adds reward to \texttt{alpha} and failure mass $(1-r)$ to \texttt{beta}. With true packet ACK/PER later, this model will become even cleaner.
+\end{implbox}
+
+\section{EXP3}
+
+\begin{intuitionbox}
+EXP3 is designed for adversarial settings. UCB and Thompson Sampling assume the channel quality is somewhat learnable as a stochastic process. EXP3 is more cautious: it assumes the reward pattern might be hostile or changing in response to the agent. It therefore keeps exploring every channel with some probability, even when one channel currently looks best.
+\end{intuitionbox}
+
+EXP3 stores a positive weight $w_i$ for each channel. These weights are converted into a selection probability:
+\begin{equation}
+    p_i = (1-\gamma)\frac{w_i}{\sum_j w_j} + \frac{\gamma}{K},
+\end{equation}
+where $K$ is the number of channels and $\gamma$ is the exploration parameter. The first term favours channels with high weights. The second term guarantees that every channel remains selectable.
+
+After selecting channel $a$ and observing reward $r$, EXP3 forms an importance-weighted reward estimate:
+\begin{equation}
+    \hat{x}_a = \frac{r}{p_a}.
+\end{equation}
+It then updates the selected channel's weight exponentially:
+\begin{equation}
+    w_a \gets w_a\exp\left(\frac{\gamma \hat{x}_a}{K}\right).
+\end{equation}
+
+\begin{algorithm}[H]
+\caption{EXP3 Channel Selection}
+\begin{algorithmic}[1]
+\State Initialise $w_i \gets 1$ for every channel $i$
+\For{each hop}
+    \State $W \gets \sum_j w_j$
+    \For{each channel $i$}
+        \State $p_i \gets (1-\gamma)w_i/W + \gamma/K$
+    \EndFor
+    \State Randomly select channel $a$ according to probabilities $p_i$
+    \State Tune TX and RX to channel $a$
+    \State Measure reward $r \in [0,1]$
+    \State $\hat{x}_a \gets r/p_a$
+    \State $w_a \gets w_a\exp(\gamma\hat{x}_a/K)$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{implbox}
+In the current code, \texttt{EXP3Agent} stores \texttt{weights} and \texttt{probs}. Before selection, \texttt{\_refresh\_probs()} normalises the weights and mixes them with uniform exploration using $\gamma$. Selection is random according to the probability vector. Update clips reward into $[0,1]$, divides by the probability of selecting that arm, and exponentially increases the selected arm's weight.
+\end{implbox}
+
+\section{How Hopping Is Implemented}
+
+\begin{resultbox}
+The current hopping implementation changes the PlutoSDR centre frequency. Each arm indexes a frequency in a channel table, for example
+\[
+    [914, 915, 916]~\mathrm{MHz}.
+\]
+For each hop, the script sets both the TX and RX PlutoSDR local oscillator (LO) to the selected centre frequency through PyADI-IIO/libiio. This is RF retuning, not merely baseband hopping inside one fixed bandwidth.
+\end{resultbox}
+
+The measured timing therefore includes host Python overhead, libiio control latency, PlutoSDR/AD936x retuning, RX capture, and demodulation. In the frozen coaxial dataset, single-radio retuning averaged about $3.9$ ms and sequential TX+RX retuning averaged about $8$ ms.
+
+\section{What Has Been Tested So Far}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Agent} & \textbf{Simulation tested?} & \textbf{Hardware tested?} \\
+\midrule
+Static & Yes & No \\
+Random & Yes & No \\
+UCB & Yes & Yes \\
+Thompson Sampling & Yes & No \\
+EXP3 & Yes & No \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The hardware result is therefore a \textbf{control-loop proof}, not a final algorithm comparison. It shows that a MAB agent can choose a channel, retune both radios, receive and demodulate a burst, compute a reward, and update online. It does not yet show that UCB beats Thompson Sampling, EXP3, random hopping, or static hopping on real hardware.
+
+\section{Key Takeaways}
+
+\begin{itemize}
+    \item UCB is the clean baseline: optimistic exploration plus average reward.
+    \item Thompson Sampling is belief-based: sample from each channel's probability model and choose the best sample.
+    \item EXP3 is adversarial: maintain weights, randomise actions, and keep exploring even when one channel looks best.
+    \item Current hardware hopping changes the PlutoSDR LO/centre frequency on both radios.
+    \item Current hardware data is coaxial bench evidence, not OTA or anti-jamming evidence.
+    \item The next major implementation step is packet-validity gating, so acquisition failures do not masquerade as bad channel rewards.
+\end{itemize}
+
+\end{document}
