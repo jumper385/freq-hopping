@@ -46,7 +46,7 @@ class TestInit:
         assert mock_pluto.tx_rf_bandwidth == 1_000_000
 
     def test_tx_gain_applied(self, mock_pluto, sdr):
-        assert mock_pluto.tx_hardwaregain_chan0 == -20
+        assert mock_pluto.tx_hardwaregain_chan0 == 0
 
     def test_rx_gain_applied(self, mock_pluto, sdr):
         assert mock_pluto.rx_hardwaregain_chan0 == 30

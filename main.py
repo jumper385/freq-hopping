@@ -23,7 +23,7 @@ def main():
     data_tones = ofdm.data_tone_count
 
     # two radios: USB-attached TX, IP-attached RX
-    rx_sdr = PlutoSDR(uri="usb:", tx_gain=-20)
+    rx_sdr = PlutoSDR(uri="usb:", tx_gain=0)
     tx_sdr = PlutoSDR(uri="ip:192.168.8.93", rx_gain=30)
 
     # build a multi-symbol burst payload

@@ -76,7 +76,7 @@ def main() -> int:
     p.add_argument("--freqs", default="914000000,915000000,916000000")
     p.add_argument("--agent", choices=["static", "random", "ucb", "ts", "exp3"], default="ucb")
     p.add_argument("--sample-rate", type=int, default=1_000_000)
-    p.add_argument("--tx-gain", type=int, default=-50)
+    p.add_argument("--tx-gain", type=int, default=0, help="TX hardware gain dB; 0=full power for OTA")
     p.add_argument("--rx-gain", type=int, default=30)
     p.add_argument("--buffer-size", type=int, default=16_384)
     p.add_argument("--hops", type=int, default=30)

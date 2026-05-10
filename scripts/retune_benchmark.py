@@ -23,7 +23,7 @@ def main() -> int:
     p.add_argument("--freq", type=int, nargs="+", default=[914_000_000, 915_000_000, 916_000_000])
     p.add_argument("--sample-rate", type=int, default=1_000_000)
     p.add_argument("--rx-gain", type=int, default=30)
-    p.add_argument("--tx-gain", type=int, default=-60)
+    p.add_argument("--tx-gain", type=int, default=0, help="TX hardware gain dB; 0=full power for OTA")
     p.add_argument("--buffer-size", type=int, default=16_384)
     p.add_argument("--loops", type=int, default=50)
     p.add_argument("--capture", action="store_true", help="also capture one RX buffer after each retune")

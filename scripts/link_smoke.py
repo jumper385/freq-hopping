@@ -26,7 +26,7 @@ def main() -> int:
     p.add_argument("--rx-uri", required=True)
     p.add_argument("--freq", type=int, default=915_000_000)
     p.add_argument("--sample-rate", type=int, default=1_000_000)
-    p.add_argument("--tx-gain", type=int, default=-60, help="Pluto TX attenuation dB; start conservative")
+    p.add_argument("--tx-gain", type=int, default=0, help="TX hardware gain dB; 0=full power for OTA, negative values attenuate")
     p.add_argument("--rx-gain", type=int, default=30)
     p.add_argument("--bursts", type=int, default=20)
     p.add_argument("--symbols", type=int, default=10)

@@ -13,7 +13,7 @@ class PlutoSDR:
         uri: str,
         center_freq: int = 915_000_000,
         sample_rate: int = 1_000_000,
-        tx_gain: int = -20,
+        tx_gain: int = 0,
         rx_gain: int = 30,
         buffer_size: int = 1024 * 16,
     ):

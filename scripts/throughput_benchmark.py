@@ -12,12 +12,12 @@ Run from the repo root::
 Test a sweep::
 
     python scripts/throughput_benchmark.py --tx-uri usb: --rx-uri ip:192.168.8.93 \\
-        --sweep bursts=1,5,10,20,50 --per-config 8 --tx-gain -30
+        --sweep bursts=1,5,10,20,50 --per-config 8 --tx-gain 0
 
 Single quick spot check (no sweep)::
 
     python scripts/throughput_benchmark.py --tx-uri usb: --rx-uri ip:192.168.8.93 \\
-        --bursts 10 --per-config 20 --freq 915e6 --tx-gain -30
+        --bursts 10 --per-config 20 --freq 915e6 --tx-gain 0
 
 Dry-run (no SDR, just print framing numbers)::
 
@@ -116,7 +116,8 @@ def main() -> int:
     p.add_argument("--rx-uri", help="Pluto RX URI (skip for dry-run)")
     p.add_argument("--freq", type=float, default=915e6)
     p.add_argument("--sample-rate", type=int, default=1_000_000)
-    p.add_argument("--tx-gain", type=int, default=-40)
+    p.add_argument("--tx-gain", type=int, default=0,
+                   help="TX hardware gain dB; 0=full power, negative values attenuate (coax bench)")
     p.add_argument("--rx-gain", type=int, default=30)
     p.add_argument("--buffer-size", type=int, default=16_384)
     p.add_argument("--bursts", type=int, default=10,
