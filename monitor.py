@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from collections import deque
 
-from src.OFDM import OFDM
+from src.modem import Modem
+from src.OFDM import OFDM          # ← swap this import to try a different modem
 from src.PlutoSDR import PlutoSDR
 
 # ---------------------------------------------------------------------------
@@ -25,22 +26,22 @@ from src.PlutoSDR import PlutoSDR
 # ---------------------------------------------------------------------------
 CP_LEN      = 64
 ROLL_OFF    = 8
-N_SYMS      = 10
+N_SYMS      = 1
 N_HISTORY   = 8       # number of past bursts kept in the constellation
 UPDATE_MS   = 50      # target plot refresh interval in milliseconds
 
 # ---------------------------------------------------------------------------
 # Setup
 # ---------------------------------------------------------------------------
-ofdm = OFDM(cp_len=CP_LEN, roll_off=ROLL_OFF)
+modem: Modem = OFDM(cp_len=CP_LEN, roll_off=ROLL_OFF)  # ← swap the modem here
 
-data_tones = ofdm.data_tone_count
+data_tones = modem.data_tone_count
 
 # rx_sdr = PlutoSDR(uri="usb:", rx_gain=30)
 # tx_sdr = PlutoSDR(uri="ip:192.168.8.93", tx_gain=0)
 
-rx_sdr = PlutoSDR(uri="usb:0.1.5", rx_gain=30)
-tx_sdr = PlutoSDR(uri="usb:1.1.5", tx_gain=0)
+rx_sdr = PlutoSDR(uri="ip:192.168.8.93", rx_gain=30)
+tx_sdr = PlutoSDR(uri="ip:192.168.8.94", tx_gain=0)
 
 rng = np.random.default_rng(64)
 symbols_matrix = (
@@ -48,7 +49,7 @@ symbols_matrix = (
     + 1j * rng.choice([-1, 1], size=(N_SYMS, data_tones))
 ).astype(complex)
 
-burst = ofdm.modulate_burst(symbols_matrix)
+burst = modem.modulate_burst(symbols_matrix)
 print(f"Burst: {N_SYMS} symbols × {data_tones} data tones — {len(burst)} samples")
 print("Transmitting (cyclic) ...  Press Ctrl-C to stop.\n")
 tx_sdr.transmit(burst)
@@ -57,7 +58,7 @@ tx_sdr.transmit(burst)
 # Figure setup
 # ---------------------------------------------------------------------------
 plt.ion()
-fig = plt.figure(figsize=(18, 5))
+fig = plt.figure(figsize=(19, 5))
 gs  = gridspec.GridSpec(1, 3, figure=fig)
 
 ax_iq   = fig.add_subplot(gs[0])
@@ -116,13 +117,11 @@ while True:
     y = rx_sdr.receive()
 
     # --- demodulate ---
-    recovered = ofdm.demodulate_burst(y, N_SYMS)
+    recovered = modem.demodulate_burst(y, N_SYMS)
 
     # --- debug info ---
-    y_cfo = ofdm._cancel_cfo(y)
-    corr_mag, threshold = ofdm._correlate(y_cfo)
-    peaks = ofdm._preamble_detect(y_cfo)
-    pair  = ofdm._find_preamble_pair(peaks)
+    dbg = modem.sync_debug(y)
+    corr_mag, threshold, peaks, pair = dbg.corr_mag, dbg.threshold, dbg.peaks, dbg.pair
 
     # SER
     tx_flat  = symbols_matrix.flatten()

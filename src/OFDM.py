@@ -1,6 +1,8 @@
 import numpy as np
 from dataclasses import dataclass
 
+from src.modem import Modem, SyncDebug
+
 
 @dataclass
 class AcquisitionMeta:
@@ -14,7 +16,7 @@ class AcquisitionMeta:
     reason: str = ""
 
 
-class OFDM:
+class OFDM(Modem):
 	"""
 	OFDM modem with Zadoff-Chu preamble, pilot-based channel estimation, and CFO correction.
 
@@ -761,3 +763,11 @@ class OFDM:
 		return AcquisitionMeta(valid=True, p1=pair[0], p2=pair[1],
 		                       peak_count=len(peaks), peak_margin=margin,
 		                       cfo_norm=cfo_norm, reason="ok")
+
+	def sync_debug(self, y: np.ndarray) -> SyncDebug:
+		"""Expose ZC correlation and P1/P2 timing for the monitor overlay."""
+		y_cfo = self._cancel_cfo(y)
+		corr_mag, threshold = self._correlate(y_cfo)
+		peaks = self._preamble_detect(y_cfo)
+		pair = self._find_preamble_pair(peaks)
+		return SyncDebug(corr_mag=corr_mag, threshold=threshold, peaks=peaks, pair=pair)
