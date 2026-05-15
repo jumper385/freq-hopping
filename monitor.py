@@ -19,6 +19,7 @@ from collections import deque
 
 from src.modem import Modem
 from src.OFDM import OFDM          # ← swap this import to try a different modem
+from src.preamble_modem import PreambleModem
 from src.PlutoSDR import PlutoSDR
 
 # ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ from src.PlutoSDR import PlutoSDR
 # ---------------------------------------------------------------------------
 CP_LEN      = 64
 ROLL_OFF    = 8
-N_SYMS      = 1
+N_SYMS      = 4
 N_HISTORY   = 8       # number of past bursts kept in the constellation
 UPDATE_MS   = 50      # target plot refresh interval in milliseconds
 
@@ -40,8 +41,8 @@ data_tones = modem.data_tone_count
 # rx_sdr = PlutoSDR(uri="usb:", rx_gain=30)
 # tx_sdr = PlutoSDR(uri="ip:192.168.8.93", tx_gain=0)
 
-rx_sdr = PlutoSDR(uri="ip:192.168.8.93", rx_gain=30)
-tx_sdr = PlutoSDR(uri="ip:192.168.8.94", tx_gain=0)
+rx_sdr = PlutoSDR(uri="ip:192.168.8.93", rx_gain=30, center_freq=916_000_000)
+tx_sdr = PlutoSDR(uri="ip:192.168.8.94", tx_gain=0, center_freq=916_000_000)
 
 rng = np.random.default_rng(64)
 symbols_matrix = (

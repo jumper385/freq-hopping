@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
 
 import numpy as np
 
@@ -16,7 +15,7 @@ class SyncDebug:
 	corr_mag:  np.ndarray                = field(default_factory=lambda: np.array([]))
 	threshold: float                     = 0.0
 	peaks:     np.ndarray                = field(default_factory=lambda: np.array([], dtype=int))
-	pair:      Optional[tuple[int, int]] = None
+	pair:      tuple[int, int] | list[tuple[int, int]] | None = None
 
 
 class Modem(ABC):
